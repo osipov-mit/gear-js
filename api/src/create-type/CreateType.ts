@@ -7,7 +7,7 @@ import { GearApi } from '../GearApi';
 import { Metadata } from '../types/interfaces';
 import { toJSON, isJSON } from '../utils/json';
 import { Hex } from '../types';
-import { checkTypeAndPayload, getTypesFromTypeDef, setNamespaces, typeIsString } from './utils';
+import { checkTypeAndPayload, getTypesFromTypeDef, typeIsString } from './utils';
 
 export class CreateType {
   registry: Registry;
@@ -18,17 +18,17 @@ export class CreateType {
     this.namespaces = undefined;
   }
 
-  private createRegistry(types?: Hex | object | Uint8Array): Map<string, string> {
+  private createRegistry(types?: Hex | object | Uint8Array): void {
     if (!types) {
       return null;
     }
     if (isHex(types) || isU8a(types)) {
-      const { typesFromTypeDef, namespaces } = getTypesFromTypeDef(types, this.registry);
-      types = typesFromTypeDef;
-      this.namespaces = namespaces;
+      const typesFromTypeDef = getTypesFromTypeDef(types, this.registry);
+      // types = typesFromTypeDef;
+      // this.namespaces = namespaces;
+      return this.registerTypes(typesFromTypeDef as RegistryTypes);
     }
-    this.registerTypes(types as RegistryTypes);
-    return this.namespaces;
+    return this.registerTypes(types as RegistryTypes);
   }
 
   /**
@@ -81,12 +81,9 @@ export class CreateType {
    */
   public create(type: string, payload: unknown, meta?: Metadata): Codec {
     type = checkTypeAndPayload(type, payload);
-    const namespaces = meta?.types ? this.createRegistry(meta.types) : this.createRegistry();
+    meta?.types ? this.createRegistry(meta.types) : this.createRegistry();
 
-    return this.createType(
-      namespaces ? setNamespaces(type, namespaces) : type,
-      isJSON(payload) ? toJSON(payload) : payload,
-    );
+    return this.createType(type, isJSON(payload) ? toJSON(payload) : payload);
   }
 
   /**

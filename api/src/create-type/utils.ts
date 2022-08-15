@@ -6,6 +6,7 @@ import { toCamelCase } from '../utils/string';
 import { CreateTypeError } from '../errors';
 import { REGULAR_EXP } from './regexp';
 import { Hex } from '../types';
+import { isJSON, toJSON } from '../utils';
 
 export function typeIsString(type: string): boolean {
   return ['string', 'utf8', 'utf-8', 'text'].includes(type.toLowerCase());
@@ -18,31 +19,7 @@ export function checkTypeAndPayload(type: string, payload: unknown): string {
   return type || 'Bytes';
 }
 
-function findTypeInNamepaces(type: string, namespaces: Map<string, string>) {
-  for (const [key, value] of namespaces) {
-    if (key.toLowerCase() === type.toLowerCase()) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-export function setNamespaces(type: string, namespaces: Map<string, string>): string {
-  const matches = type.match(REGULAR_EXP.endWord);
-  findTypeInNamepaces(type, namespaces);
-  matches.forEach((match, index) => {
-    if (namespaces) {
-      const foundType =
-        findTypeInNamepaces(match, namespaces) || findTypeInNamepaces(`${match}${matches[index + 1]}`, namespaces);
-      if (foundType !== undefined) {
-        type = type.replace(new RegExp(match, 'g'), foundType);
-      }
-    }
-  });
-  return type;
-}
-
-export function replaceNamespaces(type: string, namespaces: Map<string, string>): string {
+function replaceNamespaces(type: string, namespaces: Map<string, string>): string {
   const match = type.match(REGULAR_EXP.endWord);
   namespaces.forEach((value, key) => {
     type = match.includes(value) ? type.replace(new RegExp(value, 'g'), key) : type;
@@ -50,28 +27,60 @@ export function replaceNamespaces(type: string, namespaces: Map<string, string>)
   return type;
 }
 
-export function getTypesFromTypeDef(
-  types: Uint8Array | Hex,
-  registry?: Registry,
-): { typesFromTypeDef: { [name: string]: string }; namespaces: Map<string, string> } {
-  if (!registry) {
-    registry = new TypeRegistry();
-  }
-  const typesFromTypeDef = {};
-  const namespaces = new Map<string, string>();
-  const portableReg = new PortableRegistry(registry, isHex(types) ? hexToU8a(types) : types, true);
-  portableReg.types.forEach(({ id, type: { path } }) => {
-    const typeDef = portableReg.getTypeDef(id);
-    if (path.length === 0 || (!typeDef.lookupName && !typeDef.lookupNameRoot)) {
-      return;
+function doesIdenticalTypeNamesExist(portableReg: PortableRegistry) {
+  const names = new Set<string>();
+  for (const {
+    id,
+    type: { path, def },
+  } of portableReg.types) {
+    if (path.length < 2 || def.isPrimitive) {
+      continue;
     }
     const name = portableReg.getName(id);
     let camelCasedNamespace = toCamelCase(path.slice(0, path.length - 1));
     if (camelCasedNamespace === name) {
       camelCasedNamespace = path.length > 2 ? toCamelCase(path.slice(0, path.length - 2)) : undefined;
     }
-    namespaces.set(name.replace(camelCasedNamespace, ''), name);
-    typesFromTypeDef[typeDef.lookupName || typeDef.lookupNameRoot] = typeDef.type.toString();
-  });
-  return { typesFromTypeDef, namespaces };
+    const replacedName = name.replace(camelCasedNamespace, '');
+    if (names.has(replacedName)) {
+      return null;
+    }
+    names.add(replacedName);
+  }
+}
+
+export function getTypesFromTypeDef(types: Uint8Array | Hex, registry?: Registry): Record<string, string> {
+  if (!registry) {
+    registry = new TypeRegistry();
+  }
+  const typesFromTypeDef = {};
+  const namespaces = new Map<string, string>();
+  const portableReg = new PortableRegistry(registry, isHex(types) ? hexToU8a(types) : types, true);
+  const identicalTypes = doesIdenticalTypeNamesExist(portableReg);
+
+  for (const {
+    id,
+    type: { path, def },
+  } of portableReg.types) {
+    if (path.length < 2 || def.isPrimitive) {
+      continue;
+    }
+    const typeDef = portableReg.getTypeDef(id);
+    const name = portableReg.getName(id);
+    let camelCasedNamespace = toCamelCase(path.slice(0, path.length - 1));
+    if (camelCasedNamespace === name) {
+      camelCasedNamespace = path.length > 2 ? toCamelCase(path.slice(0, path.length - 2)) : undefined;
+    }
+    !identicalTypes && namespaces.set(name.replace(camelCasedNamespace, ''), name);
+    typesFromTypeDef[identicalTypes ? name : name.replace(camelCasedNamespace, '')] = typeDef.type.toString();
+  }
+  for (const type of Object.keys(typesFromTypeDef)) {
+    const replaced = replaceNamespaces(typesFromTypeDef[type], namespaces);
+    if (replaced === type) {
+      delete typesFromTypeDef[type];
+      continue;
+    }
+    typesFromTypeDef[type] = isJSON(replaced) ? toJSON(replaced) : replaced;
+  }
+  return typesFromTypeDef;
 }
